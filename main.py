@@ -82,10 +82,11 @@ class Grid:
 
 class Trajectory:
 
-    def __init__(self) -> None:
-        self.pos: tuple = (0, 0)
+    def __init__(self, pos: tuple) -> None:
+        self.pos: tuple = pos
         self.bans: list[tuple[int, int]] = []
         self.ban_map = dict()
+        self.init_ban_map([(x, y) for x in range(-1, 16) for y in range(-1, 16)])
 
     def __eq__(self, pos):
         return self.pos == pos
@@ -197,6 +198,12 @@ class Submarine:
         self.warnings = []
         self.possibles = []
 
+    def __str__(self):
+        return str(self.pos)
+
+    def __repr__(self):
+        return str(self)
+
     def ban(self, pos):
         self.bans.append(pos)
         self.ban_map[pos] = True
@@ -241,30 +248,30 @@ class Submarine:
                 else:
                     return None
 
-    def init_possible(self, grid):
+    def init_possible(self, grid: Grid):
         self.possibles = []
         for x in range(WIDTH):
             for y in range(HEIGHT):
                 pos = (x, y)
                 if grid.is_water(pos):
-                    self.possibles.append(pos)
+                    self.possibles.append(Trajectory(pos))
 
     def narrow(self, narrowed: list[tuple[int, int]]):
         if len(narrowed) == 0:
             return
         new_possibles = []
-        for n in narrowed:
-            if n in self.possibles:
-                new_possibles.append(n)
+        for possible in self.possibles:
+            if possible in narrowed:
+                new_possibles.append(possible)
         self.possibles = new_possibles
 
     def narrow_exclude(self, excluded: list[tuple[int, int]]):
         if len(excluded) == 0:
             return
         new_possibles = []
-        for poss in self.possibles:
-            if poss not in excluded:
-                new_possibles.append(poss)
+        for possible in self.possibles:
+            if possible not in excluded:
+                new_possibles.append(possible)
         self.possibles = new_possibles
 
     def did(self, power, step_back=-1):
@@ -313,32 +320,37 @@ class Submarine:
             all_offsets += [(0, 0)]
             jumps = [tadd(jump, offset) for offset in all_offsets for jump in jumps]
 
-        new_possibles = []
-        for pos in self.possibles:
+        new_possibles: list[Trajectory] = []
+        for possible in self.possibles:
             for jump in jumps:
+                pos: tuple = possible.pos
                 next_pos = tadd(pos, jump)
                 if grid.is_water(next_pos):
-
+                    new_bans = [next_pos]
                     all_good = True
-                    if w == SILENCE and self.name == "ALLY":
-                        dx = 1 if pos[0] < next_pos[0] else (-1 if pos[0] > next_pos[0] else 0)
-                        dy = 1 if pos[1] < next_pos[1] else (-1 if pos[1] > next_pos[1] else 0)
-                        offset = (dx, dy)
-                        if not teq(offset, (0, 0)):
-                            interpolation = tadd(pos, offset)
-                            # debug(len(self.bans))
-                            # debug(interpolation, self.previous_banned[interpolation])
-                            while not teq(interpolation, next_pos):
-                                if not grid.is_water(interpolation) or self.previous_banned[interpolation]:
-                                    all_good = False
-                                    break
-                                interpolation = tadd(interpolation, offset)
-                            if self.previous_banned[next_pos]:
+                    
+                    dx = 1 if pos[0] < next_pos[0] else (-1 if pos[0] > next_pos[0] else 0)
+                    dy = 1 if pos[1] < next_pos[1] else (-1 if pos[1] > next_pos[1] else 0)
+                    offset = (dx, dy)
+                    if not teq(offset, (0, 0)):
+                        interpolation = tadd(pos, offset)
+                        while not teq(interpolation, next_pos):
+                            new_bans.append(interpolation)
+                            if not grid.is_water(interpolation) or possible.banned(interpolation):
                                 all_good = False
+                                break
+                            interpolation = tadd(interpolation, offset)
+                        if self.banned(next_pos):
+                            all_good = False
 
                     if all_good:
-                        new_possibles.append(next_pos)
-        self.possibles = list(set(new_possibles))  # remove duplicates
+                        branch = cp.deepcopy(possible)
+                        branch.pos = next_pos
+                        for new_ban in new_bans:
+                            branch.ban(new_ban)
+                        new_possibles.append(branch)
+
+        self.possibles = new_possibles
 
     def print_possible(self, grid: Grid):
 
