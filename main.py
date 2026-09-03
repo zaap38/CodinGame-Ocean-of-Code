@@ -630,12 +630,13 @@ class Submarine:
                 for power in [TORPEDO, TRIGGER]:
                     if enemy.did(power):
                         last_power_pos = enemy.get_last(power)
-                        assert type(last_power_pos) == tuple[int, int]
+                        assert type(last_power_pos) == tuple
                         if delta == 2:
                             candidates = [last_power_pos]
                             break
                         elif delta == 1:
                             candidates = get8co(last_power_pos, exclude_center=True)
+                            break
 
             elif enemy_powers_used == 2:
                 candidates = []
