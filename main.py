@@ -80,6 +80,44 @@ class Grid:
         return locations
 
 
+class Trajectory:
+
+    def __init__(self) -> None:
+        self.pos: tuple = (0, 0)
+        self.bans: list[tuple[int, int]] = []
+        self.ban_map = dict()
+
+    def __eq__(self, pos):
+        return self.pos == pos
+
+    def ban(self, pos):
+            self.bans.append(pos)
+            self.ban_map[pos] = True
+    
+    def init_ban_map(self, values):
+        for v in values:
+            self.ban_map[v] = False
+
+    def set_bans(self, ban_list):
+        if type(ban_list) != list:
+            ban_list = [ban_list]
+        self.bans = ban_list
+        self.reset_ban_map()
+        for ban in self.bans:
+            self.ban_map[ban] = True
+
+    def reset_ban_map(self):
+        for k in self.ban_map.keys():
+            self.ban_map[k] = False
+
+    def banned(self, pos):
+        return self.ban_map[pos]
+
+    def flush_bans(self):
+        self.bans = []
+        self.reset_ban_map()
+    
+
 def debug(*args):
     print(*args, file=sys.stderr, flush=True)
 
@@ -150,7 +188,6 @@ class Submarine:
 
         self.mines: list[tuple[int, int]] = []
 
-        self.last_action: tuple[tuple[str]] = None  # type: ignore
         self.last = {power: (0, 0) for power in [TORPEDO, MINE, TRIGGER]}
         self.last_sonar: int = 1
         self.sonar_result: bool = False
@@ -324,7 +361,7 @@ class Submarine:
             if grid.get(x, y).is_water() and grid.get(x, y).sector == 5:
                 return (x, y)
 
-    def do_movement(self, grid: Grid, opp, force_silence=False):
+    def do_movement(self, grid: Grid, enemy: "Submarine", force_silence=False):
         directions = [NORTH, SOUTH, EAST, WEST]
         rd.shuffle(directions)
 
@@ -366,7 +403,7 @@ class Submarine:
         if len(fitness) > 0:
             if self.spotted() or force_silence:
                 if self.ready(SILENCE):
-                    return self.do_silence(grid, opp)
+                    return self.do_silence(grid, enemy)
             
             best_fit = []
             for dir, v in fitness.items():
@@ -374,11 +411,11 @@ class Submarine:
                     best_fit.append(dir)
             rd.shuffle(best_fit)
             
-            return MOVE + " " + str(best_fit[0]) + " " + self.compute_charge(opp)
+            return MOVE + " " + str(best_fit[0]) + " " + self.compute_charge(enemy)
         
         return self.do_surface()
     
-    def do_mine(self, grid: Grid, opp):
+    def do_mine(self, grid: Grid, enemy: "Submarine"):
 
         if not self.ready(MINE):
             return None
@@ -405,7 +442,7 @@ class Submarine:
         self.last[MINE] = best_target
         return MINE + " " + best_dir
     
-    def do_trigger(self, grid: Grid, opp):
+    def do_trigger(self, grid: Grid, enemy: "Submarine"):
 
         if len(self.mines) == 0:
             return None
@@ -417,7 +454,7 @@ class Submarine:
 
         for i, mine in enumerate(self.mines):
             score = 0
-            for possible in opp.possibles:
+            for possible in enemy.possibles:
                 if t8co(mine, possible):
                     score += 1
                     if teq(mine, possible):
@@ -432,12 +469,12 @@ class Submarine:
                 fitness = score
                 idx = i
 
-        if fitness >= min(5, len(opp.possibles)) and len(opp.possibles) < 20:
+        if fitness >= min(5, len(enemy.possibles)) and len(enemy.possibles) < 20:
             self.last[TRIGGER] = self.mines.pop(idx)
             return TRIGGER + " " + str(to_pop[0]) + " " + str(to_pop[1])
         return None
     
-    def do_silence(self, grid: Grid, opp):
+    def do_silence(self, grid: Grid, enemy: "Submarine"):
         directions = [NORTH, SOUTH, EAST, WEST]
         rd.shuffle(directions)
         jumps = []
@@ -452,7 +489,7 @@ class Submarine:
                 else:
                     break
         if len(jumps) == 0:
-            return self.do_surface() #+ "|" + self.do_silence(grid, opp)
+            return self.do_surface()
         
         rd.shuffle(jumps)
         # debug("SILENCE:", jumps)
@@ -461,7 +498,7 @@ class Submarine:
             self.ban(tadd(self.pos, tscale(OFFSET[jump[0]], distance)))
         return SILENCE + " " + jump[0] + " " + str(jump[1])
 
-    def do_torpedo(self, grid: Grid, opp):
+    def do_torpedo(self, grid: Grid, enemy: "Submarine"):
 
         if self.ready(TORPEDO):
             targets = dict()
@@ -476,7 +513,7 @@ class Submarine:
 
             for target in targets:
                 score = 0
-                for possible in opp.possibles:
+                for possible in enemy.possibles:
                     if t8co(target, possible):
                         score += 1
                         if teq(target, possible):
@@ -484,12 +521,12 @@ class Submarine:
                 targets[target] = score
 
             final = rd.choice([target for target in targets if targets[target] == max(targets.values())])
-            if targets[final] > 0 and targets[final] > len(opp.possibles) * 0.25:
+            if targets[final] > 0 and targets[final] > len(enemy.possibles) * 0.25:
                 self.last[TORPEDO] = final
                 self.cooldown[TORPEDO] = CD_TORPEDO
                 return TORPEDO + " " + str(final[0]) + " " + str(final[1])
 
-    def do_sonar(self, grid: Grid, opp):
+    def do_sonar(self, grid: Grid, enemy: "Submarine"):
 
         if not self.ready(SONAR):
             return
@@ -501,20 +538,20 @@ class Submarine:
             score = 0
             locations = grid.get_sector_valid(sector)
             for location in locations:
-                if location in opp.possibles:
+                if location in enemy.possibles:
                     score += 1
             if score > max_val:
                 max_val = score
                 max_key = sector
 
-        if max_val > len(opp.possibles) * 0.8:
+        if max_val > len(enemy.possibles) * 0.8:
             return None
 
         self.last_sonar = max_key  # type: ignore
 
         return SONAR + " " + str(self.last_sonar)
 
-    def do_action(self, grid: Grid, opp):
+    def do_action(self, grid: Grid, enemy: "Submarine"):
 
         self.previous_banned = cp.deepcopy(self.ban_map)
 
@@ -529,26 +566,24 @@ class Submarine:
             actions.append(self.do_surface())
             emergency_surfaced = True
 
-        action_torpedo = self.do_torpedo(grid, opp)
+        action_torpedo = self.do_torpedo(grid, enemy)
         if action_torpedo is not None:
             actions.append(action_torpedo)
 
-        action_mine = self.do_mine(grid, opp)
+        action_mine = self.do_mine(grid, enemy)
         if action_mine is not None:
             actions.append(action_mine)
 
-        action_trigger = self.do_trigger(grid, opp)
+        action_trigger = self.do_trigger(grid, enemy)
         if action_trigger is not None:
             actions.append(action_trigger)
 
-        action_sonar = self.do_sonar(grid, opp)
+        action_sonar = self.do_sonar(grid, enemy)
         if action_sonar is not None:
             actions.append(action_sonar)
 
-        actions.append(self.do_movement(grid, opp, force_silence=emergency_surfaced))
+        actions.append(self.do_movement(grid, enemy, force_silence=emergency_surfaced))
 
-        assert len(actions) > 0
-        self.last_action = tuple(tuple(action.split()) for action in actions)  # type: ignore
         output = "|".join([action for action in actions if action is not None])
 
         return output
@@ -655,20 +690,17 @@ class Submarine:
         if len(self.history) > 0:
             last_actions = self.history[-1]
             for action in last_actions:
-                old_possible_count = len(self.possibles)
                 power = action[0]
                 if power in [MOVE, SILENCE]:
                     self.movement_narrowing(grid, action)
     
                 elif power == SURFACE:
-                    # narrow if surface
-                    sector = int(self.get_action(SURFACE)[1])  # type: ignore
-                    self.narrow(grid.get_sector_valid(sector))
+                    # narrow based on sector if surface
+                    self.narrow(grid.get_sector_valid(self.get_last(SURFACE)))
     
                 elif power == TORPEDO:
                     # narrow around torpedo
-                    _, x, y = self.get_action(TORPEDO)  # type: ignore
-                    base = (int(x), int(y))
+                    base = self.get_last(TORPEDO)  # type: ignore
                     candidates = []
                     torpedo_range = 4
                     for i in range(-torpedo_range, torpedo_range + 1):
@@ -678,9 +710,6 @@ class Submarine:
                                     tdist(candidate, base) <= torpedo_range:
                                 candidates.append(candidate)
                     self.narrow(candidates)
-
-                if self.name == "ALLY" and False:
-                    debug(power, ":", old_possible_count, "->", len(self.possibles))
                     
         if self.name == "ALLY" and self.pos not in self.possibles:
             self.warnings.append("CORRUPTED self.possibles")
